@@ -7,7 +7,7 @@ import re
 
 BASE_URL = "https://www.perfume24x7.com"
 
-CATEGORY_IDS = list(range(100, 130))
+CATEGORY_IDS = list(range(100, 127))
 CONCENTRATION_IDS = list(range(50, 54))
 
 def save_json(filename, data):
@@ -61,6 +61,12 @@ def find_elements_by_selector(soup, selector):
     except Exception as e:
         print(f"Error finding {selector}: {e}")
 
+def find_element_by_atrribute(soup, tag, class_, attribute, value):
+    try:
+        return soup.find(tag, class_= class_, attrs={attribute: value})
+    except Exception as e:
+        print(f"Error finding {tag} with {attribute}={value}: {e}")
+
 def get_text(element):
     try:
         return element.get_text(strip=True)
@@ -72,6 +78,21 @@ def get_html(element):
         return element.decode_contents()
     except Exception as e:
         print(f"Error getting html from {element}: {e}")
+
+
+def get_random_price(size_name):
+    match = re.search(r'(\d+)\s*ml', size_name)
+    if match:
+        min_price = int(match.group(1))
+        max_price = 6 * int(match.group(1))
+    else:
+        min_price = 100
+        max_price = 1500
+
+    if "refillable" in size_name.lower():
+        max_price = max_price * 1.5
+
+    return round(random.uniform(min_price, max_price), 2)
 
 def scrape_perfume_data():
     brand_soup = get_soup(f"{BASE_URL}/collections")
@@ -119,6 +140,9 @@ def scrape_perfume_data():
     }
 
     for brandLinkElement in brand_link_elements:
+        if brand_id == 1030:
+            brand_id += 1
+            continue
         brand_instance["id"] = brand_id
 
         # Image of brand
@@ -154,45 +178,66 @@ def scrape_perfume_data():
             # Image of product
             image_instance["id"] = image_id
             image_instance["product_id"] = product_id
+            image_instance["path"] = format_image_path(find_element_by_selector(product_detail_soup, 'div.image-wrap > image-element > img')['src'])
+            image_instance["main"] = True
+            images.append(image_instance.copy()); image_id += 1
+
             for index, item in enumerate(find_elements_by_class(product_detail_soup, 'a', 'product__thumb')):
-                image_instance["path"] = format_image_path(item['href'])
-                if index == 0:
-                    image_instance["main"] = True
-                else:
+                image_instance["id"] = image_id
+                if index > 0:
+                    image_instance["path"] = format_image_path(item['href'])
                     image_instance["main"] = False
 
                 # Append image to images
                 images.append(image_instance.copy()); image_id += 1
 
-            # Size of product
-            size_instance["id"] = size_id
-            try:
-                size_instance["name"] = re.search(r'(\d+\s*ml)', product_instance["name"].lower()).group(1)
-            except:
-                size_instance["name"] = "100 ml"
-
-            
+            image_instance.clear()
+        
             # Quantity of product
             quantity_instance["id"] = quantity_id
             quantity_instance["product_id"] = product_id
             quantity_instance["quantity"] = random.randint(1, 100)
-            quantity_instance["price"] = random.randint(800, 8000)
 
-            # check if name already exists in sizes
-            if not any(item["name"] == size_instance["name"] for item in sizes):
-                # Append size to sizes
-                quantity_instance["size_id"] = size_id
-                sizes.append(size_instance.copy()); size_id += 1; size_instance.clear()
+            field_element = find_element_by_atrribute(product_detail_soup, 'fieldset', 'variant-input-wrap', 'name', 'Size')
+
+            if field_element is not None:
+                for size_element in find_elements_by_selector(field_element, 'div.variant-input > label.variant__button-label'):
+                    size_instance["id"] = size_id
+                    quantity_instance["id"] = quantity_id
+                    size = get_text(size_element).lower()
+                    if 'ml' in size:
+                        size_instance["name"] = re.sub(r'(\d+)(ml)', r'\1 \2', size)
+                    else:
+                        size_instance["name"] = '100 ml'
+                    if not any(item["name"] == size_instance["name"] for item in sizes):
+                        quantity_instance["size_id"] = size_id
+                        sizes.append(size_instance.copy()); size_id += 1
+                    else:
+                        quantity_instance["size_id"] = next((item['id'] for item in sizes if item['name'] == size_instance["name"]))
+                    quantity_instance["price"] = get_random_price(size_instance["name"])
+                    quantities.append(quantity_instance.copy()); quantity_id += 1
+                   
             else:
-                # Append size to sizes
-                quantity_instance["size_id"] = next((item['id'] for item in sizes if item['name'] == size_instance["name"]))
+                size_instance["id"] = size_id
+                match = re.search(r'(\d+)\s*ml', product_instance["name"].lower())
+                if match:
+                    quantity = match.group(1)
+                    size_instance["name"] = f"{quantity} ml"  # Format with a space between quantity and unit
+                else:
+                    size_instance["name"] = "100 ml"  # Default value if no match is found
 
-
-            # Append quantity to quantities
-            quantities.append(quantity_instance.copy()); quantity_id += 1; quantity_instance.clear()
+                if not any(item["name"] == size_instance["name"] for item in sizes):
+                    quantity_instance["size_id"] = size_id
+                    sizes.append(size_instance.copy()); size_id += 1; 
+                else:
+                    quantity_instance["size_id"] = next((item['id'] for item in sizes if item['name'] == size_instance["name"]))
+                
+                quantity_instance["price"] = get_random_price(size_instance["name"])
+                quantities.append(quantity_instance.copy()); quantity_id += 1; quantity_instance.clear()
 
             # clear
             # Append product to products
+            size_instance.clear()
             products.append(product_instance.copy()); product_id += 1; product_instance.clear()
 
         # Append brand to brands
